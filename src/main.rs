@@ -1,10 +1,11 @@
-use rand::Rng;
+use rand::{thread_rng, Rng};
+use rand::seq::SliceRandom;
 use mnist::{Mnist, MnistBuilder};
 
 fn main() {
 
     let mnist = load_mnist();
-    let (train_set, test_set) = prepare_dataset(mnist);
+    let (mut train_set, test_set) = prepare_dataset(mnist);
 
                         // input, hidden, output                            
     let layers_neurons = vec![784, 128, 10];
@@ -14,7 +15,7 @@ fn main() {
     let epochs = 10_000;
 
 
-    train(&mut layers, &train_set, epochs, learning_rate, &test_set);
+    train(&mut layers, &mut train_set, epochs, learning_rate, &test_set);
 
 /*
     let mut rng = rand::thread_rng();
@@ -242,15 +243,15 @@ fn relu_derivative(z: f32) -> f32 {
     0.0
 }
 
-fn calculate_loss(layers: &Vec<Layer>, targets: &Vec<f32>) -> f32 {
-    let output_layer = &layers[layers.len() - 1];
-    let mut loss = 0.0;
-    for i in 0..output_layer.neurons.len() {
-        let output = output_layer.neurons[i].activated_value;
-        let target = targets[i];
-        loss += (output - target).powi(2);
-    }
-    loss / (output_layer.neurons.len() as f32)
+fn calculate_loss(network: &Vec<Layer>, targets: &Vec<f32>) -> f32 {
+    let output_layer_ndx = network.len() - 1;
+    let outputs = &network[output_layer_ndx].neurons;
+    
+    targets
+        .iter()
+        .zip(outputs.iter())
+        .map(|(&target, neuron)| -target * (neuron.activated_value + 1e-12).ln())
+        .sum::<f32>()
 }
 
 fn softmax(z: &Vec<f32>) -> Vec<f32> {
@@ -322,11 +323,14 @@ fn convert_to_samples(images: &Vec<f32>, labels: &Vec<u8>) -> Vec<Sample> {
 
 }
 
-fn train(network: &mut Vec<Layer>, training_set: &Vec<Sample>, epochs: usize, learning_rate: f32, test_set: &Vec<Sample>) {
+fn train(network: &mut Vec<Layer>, training_set: &mut Vec<Sample>, epochs: usize, learning_rate: f32, test_set: &Vec<Sample>) {
     for epoch in 0..epochs {
+        shuffle_dataset(training_set);
+        let mut total_loss = 0.0;
         for sample in training_set {
             forward_pass(network, sample.inputs.clone());
             back_propagate(network, sample.target.clone(), learning_rate);
+            total_loss += calculate_loss(network, &sample.target);
         }
 
         if epoch % 1000 == 0 {
@@ -334,6 +338,7 @@ fn train(network: &mut Vec<Layer>, training_set: &Vec<Sample>, epochs: usize, le
 
             let training_accuracy = evaluate(network, training_set);
             let test_accuracy = evaluate(network, test_set);
+            println!("Training Loss: {:.4}", total_loss / training_set.len() as f32);
             println!("Training Accuracy: {:.2}%, Test Accuract: {:.2}%", training_accuracy, test_accuracy);
             println!();
         }
@@ -369,4 +374,9 @@ fn argmax(vec: &Vec<f32>) -> usize {
         .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
         .map(|(idx, _)| idx)
         .unwrap_or(0)
+}
+
+fn shuffle_dataset(dataset: &mut Vec<Sample>) {
+    let mut rng = thread_rng();
+    dataset.shuffle(&mut rng);
 }
