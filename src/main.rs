@@ -327,7 +327,7 @@ fn train(network: &mut Vec<Layer>, training_set: &mut Vec<Sample>, epochs: usize
     for epoch in 0..epochs {
         shuffle_dataset(training_set);
         let mut total_loss = 0.0;
-        for sample in training_set {
+        for sample in training_set.iter() {
             forward_pass(network, sample.inputs.clone());
             back_propagate(network, sample.target.clone(), learning_rate);
             total_loss += calculate_loss(network, &sample.target);
