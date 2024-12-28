@@ -3,6 +3,20 @@ use mnist::{Mnist, MnistBuilder};
 
 fn main() {
 
+    let mnist = load_mnist();
+    let (train_set, test_set) = prepare_dataset(mnist);
+
+                        // input, hidden, output                            
+    let layers_neurons = vec![784, 128, 10];
+    let mut layers = initialize_network(&layers_neurons);
+
+    let learning_rate = 0.001;
+    let epocs = 10_000;
+
+
+
+
+/*
     let mut rng = rand::thread_rng();
     let mut layers: Vec<Layer> = vec![];
     layers.push(Layer::new(2, 0));
@@ -42,7 +56,7 @@ fn main() {
             }
             println!();
         }
-    }
+    }*/
 }
 
 pub fn forward_pass(layers: &mut Vec<Layer>, inputs: Vec<f32>) {
@@ -168,6 +182,18 @@ impl Layer {
     }
 }
 
+fn initialize_network(layers_num_neurons: &Vec<usize>) -> Vec<Layer> {
+    let mut layers = Vec::new();
+
+    layers.push(Layer::new(layers_num_neurons[0], 0));
+
+    for layer in 1..layers_num_neurons.len() {
+        layers.push(Layer::new(layers_num_neurons[layer], layers_num_neurons[layer - 1]));
+    }
+
+    layers
+}
+
 fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + f32::exp(-value))
 }
@@ -177,11 +203,7 @@ fn sigmoid_derivative(value: f32) -> f32 {
 }
 
 fn relu(z: f32) -> f32 {
-    if z > 0.0 {
-        return z; 
-    }
-
-    0.0
+   z.max(0.0) 
 }
 
 fn relu_derivative(z: f32) -> f32 {
@@ -239,4 +261,35 @@ fn one_hot_encode(label: u8, num_classes: usize) -> Vec<f32> {
     }
     
     encoded
+}
+
+struct Sample {
+    inputs: Vec<f32>,
+    target: Vec<f32>,
+}
+
+fn prepare_dataset(mnist: Mnist) -> (Vec<Sample>, Vec<Sample>) {
+    let train_images = normalize_images(mnist.trn_img);
+    let train_labels = mnist.trn_lbl;
+
+    let test_images = normalize_images(mnist.tst_img);
+    let test_labels = mnist.tst_lbl;
+
+    let train_set = convert_to_samples(&train_images, &train_labels);
+
+    let test_set = convert_to_samples(&test_images, &test_labels);
+
+    (train_set, test_set)
+}
+
+fn convert_to_samples(images: &Vec<f32>, labels: &Vec<u8>) -> Vec<Sample> {
+    images
+        .chunks(784) // 28 x 28 image = 784 pixels
+        .zip(labels.iter())
+        .map(|(img, &label)| Sample {
+            inputs: img.to_vec(),
+            target: one_hot_encode(label, 10),
+        })
+        .collect::<Vec<Sample>>()
+
 }
