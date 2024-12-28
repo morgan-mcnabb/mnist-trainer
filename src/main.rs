@@ -11,10 +11,10 @@ fn main() {
     let mut layers = initialize_network(&layers_neurons);
 
     let learning_rate = 0.001;
-    let epocs = 10_000;
+    let epochs = 10_000;
 
 
-
+    train(&mut layers, &train_set, epochs, learning_rate, &test_set);
 
 /*
     let mut rng = rand::thread_rng();
@@ -103,24 +103,33 @@ pub fn forward_pass(layers: &mut Vec<Layer>, inputs: Vec<f32>) {
 pub fn back_propagate(layers: &mut Vec<Layer>, targets: Vec<f32>, learning_rate: f32) {
     // compute deltas for output layer
     let output_layer_index = layers.len() - 1;
+
+
     for i in 0..layers[output_layer_index].neurons.len() {
         let output_val = layers[output_layer_index].neurons[i].activated_value;
         let target_val = targets[i];
-        let error_signal = output_val - target_val;
-        layers[output_layer_index].neurons[i].delta = error_signal
-            * sigmoid_derivative(layers[output_layer_index].neurons[i].activated_value);
+        //let error_signal = output_val - target_val;
+        //layers[output_layer_index].neurons[i].delta = error_signal
+        //    * sigmoid_derivative(layers[output_layer_index].neurons[i].activated_value);
+        layers[output_layer_index].neurons[i].delta = output_val - target_val;
     }
 
     // compute deltas for hidden layer(s)
     for i in (1..output_layer_index).rev() {
         for j in 0..layers[i].neurons.len() {
             let mut sum_deltas = 0.0;
-            for (m, next_neuron) in layers[i + 1].neurons.iter().enumerate() {
-                sum_deltas += next_neuron.delta * layers[i + 1].neurons[m].weights[j];
+            //for (m, next_neuron) in layers[i + 1].neurons.iter().enumerate() {
+            //    sum_deltas += next_neuron.delta * layers[i + 1].neurons[m].weights[j];
+            //}
+            for m in 0..layers[i + 1].neurons.len() {
+                sum_deltas += layers[i + 1].neurons[m].delta * layers[i].neurons[j].weights[m];
             }
-            let hidden_activated_val = layers[i].neurons[j].activated_value;
-            layers[i].neurons[j].delta =
-                sum_deltas * sigmoid_derivative(hidden_activated_val);
+            
+            //let hidden_activated_val = layers[i].neurons[j].activated_value;
+            //layers[i].neurons[j].delta =
+            //sum_deltas * sigmoid_derivative(hidden_activated_val);
+            let hidden_raw = layers[i].neurons[j].raw_value;
+            layers[i].neurons[j].delta = sum_deltas * relu_derivative(hidden_raw);
         }
     }
 
@@ -311,4 +320,53 @@ fn convert_to_samples(images: &Vec<f32>, labels: &Vec<u8>) -> Vec<Sample> {
         })
         .collect::<Vec<Sample>>()
 
+}
+
+fn train(network: &mut Vec<Layer>, training_set: &Vec<Sample>, epochs: usize, learning_rate: f32, test_set: &Vec<Sample>) {
+    for epoch in 0..epochs {
+        for sample in training_set {
+            forward_pass(network, sample.inputs.clone());
+            back_propagate(network, sample.target.clone(), learning_rate);
+        }
+
+        if epoch % 1000 == 0 {
+            println!("Epoch: {}", epoch);
+
+            let training_accuracy = evaluate(network, training_set);
+            let test_accuracy = evaluate(network, test_set);
+            println!("Training Accuracy: {:.2}%, Test Accuract: {:.2}%", training_accuracy, test_accuracy);
+            println!();
+        }
+    }
+}
+
+fn evaluate(network: &mut Vec<Layer>, dataset: &Vec<Sample>) -> f32 {
+    let output_layer_ndx = network.len() - 1;
+    let mut correct = 0;
+
+    for sample in dataset {
+        forward_pass(network, sample.inputs.clone());
+        let outputs = &network[output_layer_ndx].neurons;
+        let predicted = argmax(
+            &outputs
+                .iter()
+                .map(|neuron| neuron.activated_value)
+                .collect::<Vec<f32>>(),
+        );
+
+        let actual = argmax(&sample.target);
+        if predicted == actual {
+            correct += 1;
+        }
+    } 
+
+    (correct as f32 / dataset.len() as f32) * 100.0
+}
+
+fn argmax(vec: &Vec<f32>) -> usize {
+    vec.iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
 }
