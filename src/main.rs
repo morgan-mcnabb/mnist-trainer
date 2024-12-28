@@ -160,14 +160,18 @@ pub struct Neuron {
 }
 
 impl Neuron {
-    pub fn new(initial_val: f32, num_weights: usize) -> Self {
+    pub fn new(num_inputs:usize, activation: &str) -> Self {
         let mut rng = rand::thread_rng();
-        let scale = (6.0 / (num_weights as f32 + 1.0)).sqrt();
-        let weights: Vec<f32> = (0..num_weights).map(|_| rng.gen_range(-scale..scale)).collect();
+        let scale = match activation {
+            "relu" => (2.0 / num_inputs as f32).sqrt(),
+            "sigmoid" => (1.0 / num_inputs as f32).sqrt(),
+            _ => 0.5,
+        };
+        let weights: Vec<f32> = (0..num_inputs).map(|_| rng.gen_range(-scale..scale)).collect();
         Neuron {
-            raw_value: initial_val,
+            raw_value: 0.0,
             weights: weights,
-            bias: rng.gen::<f32>(),
+            bias: rng.gen_range(-scale..scale),
             delta: 0.0,
             activated_value: 0.0,
         }
@@ -203,6 +207,14 @@ impl Layer {
         }
     }
 
+    pub fn new_custom(num_neurons: usize, num_inputs: usize, activation: &str) -> Self {
+        Layer {
+            neurons: (0..num_neurons)
+                .map(|_| Neuron::new(num_inputs, activation))
+                .collect(),
+        }
+    }
+
     fn set_neuron_raw_values(&mut self, inputs: &[f32]) {
         // could be problems if inputs is a differnet length than neurons.len
         for n in 0..self.neurons.len() {
@@ -217,7 +229,8 @@ fn initialize_network(layers_num_neurons: &Vec<usize>) -> Vec<Layer> {
     layers.push(Layer::new(layers_num_neurons[0], 0));
 
     for layer in 1..layers_num_neurons.len() {
-        layers.push(Layer::new(layers_num_neurons[layer], layers_num_neurons[layer - 1]));
+        let activation = if layer == layers_num_neurons.len() - 1 {"softmax"} else {"relu"};
+        layers.push(Layer::new_custom(layers_num_neurons[layer], layers_num_neurons[layer - 1], activation));
     }
 
     layers
