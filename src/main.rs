@@ -1,33 +1,7 @@
 use rand::Rng;
+use mnist::{Mnist, MnistBuilder};
 
 fn main() {
-    let _and_training_set = [
-        [0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 1.0, 1.0],
-    ];
-
-    let _or_training_set = [
-        [0.0, 0.0, 0.0],
-        [0.0, 1.0, 1.0],
-        [1.0, 0.0, 1.0],
-        [1.0, 1.0, 1.0],
-    ];
-
-    let nand_training_set = [
-        [0.0, 0.0, 1.0],
-        [0.0, 1.0, 1.0],
-        [1.0, 0.0, 1.0],
-        [1.0, 1.0, 0.0],
-    ];
-
-    let xor_training_set = [
-        [0.0, 0.0, 0.0],
-        [0.0, 1.0, 1.0],
-        [1.0, 0.0, 1.0],
-        [1.0, 1.0, 0.0],
-    ];
 
     let mut rng = rand::thread_rng();
     let mut layers: Vec<Layer> = vec![];
@@ -241,4 +215,28 @@ fn cross_entropy_loss(predicted: &Vec<f32>, target: &Vec<f32>) -> f32 {
     predicted.iter().zip(target.iter()).map(|(&p, &t)| {
         -t * (p + epsilon).ln()
     }).sum::<f32>()
+}
+
+fn load_mnist() -> Mnist {
+    let mnist = MnistBuilder::new()
+        .label_format_digit()
+        .training_set_length(60_000)
+        .validation_set_length(10_000)
+        .test_set_length(10_000)
+        .download_and_extract()
+        .finalize();
+    mnist
+}
+
+fn normalize_images(images: Vec<u8>) -> Vec<f32> {
+    images.into_iter().map(|pixel| pixel as f32 / 255.0).collect()
+}
+
+fn one_hot_encode(label: u8, num_classes: usize) -> Vec<f32> {
+    let mut encoded = vec![0.0; num_classes];
+    if(label as usize) < num_classes {
+        encoded[label as usize] = 1.0;
+    }
+    
+    encoded
 }
