@@ -74,10 +74,29 @@ pub fn forward_pass(layers: &mut Vec<Layer>, inputs: Vec<f32>) {
                     layers[l].neurons[j].weights[k] * layers[l - 1].neurons[k].activated_value;
             }
             weighted_sum += layers[l].neurons[j].bias;
-            layers[l].neurons[j].raw_value = weighted_sum;
-            layers[l].neurons[j].activated_value =
-                sigmoid(layers[l].neurons[j].raw_value);
+            if l < layers.len() - 1 {
+                layers[l].neurons[j].activated_value = relu(weighted_sum);
+            }
+            else {
+                layers[l].neurons[j].activated_value = weighted_sum;
+            }
+
+            //layers[l].neurons[j].raw_value = weighted_sum;
+            //layers[l].neurons[j].activated_value =
+            //    sigmoid(layers[l].neurons[j].raw_value);
         }
+    }
+
+    let output_layer_ndx = layers.len() - 1;
+    let output_z = layers[output_layer_ndx]
+        .neurons
+        .iter()
+        .map(|neuron| neuron.raw_value)
+        .collect::<Vec<f32>>();
+
+    let output_softmax = softmax(&output_z);
+    for i in 0..layers[output_layer_ndx].neurons.len() {
+        layers[output_layer_ndx].neurons[i].activated_value = output_softmax[i];
     }
 }
 
