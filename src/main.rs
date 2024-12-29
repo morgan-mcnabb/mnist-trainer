@@ -7,6 +7,8 @@ use neural_net::network::activation::Activation;
 use neural_net::training::trainer::{train, forward_pass};
 use log::{info, error};
 use env_logger;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -16,10 +18,13 @@ fn main() {
     info!("Loaded training samples: {}", train_set.len());
     info!("Loaded testing samples: {}", test_set.len());
 
-    let num_training_samples = 1000;
+    /*let num_training_samples = 10000;
+    let mut shuffled_train_set = train_set.clone();
+    let mut rng = thread_rng();
+    shuffled_train_set.shuffle(&mut rng);
     let filtered_train = train_set
         .into_iter()
-        .filter(|s| s.inputs.iter().any(|&v| v > 0.0)) // Ensure non-zero inputs
+        .filter(|s| s.inputs.iter().any(|&v| v > 0.0)) 
         .take(num_training_samples)
         .collect::<Vec<_>>();
 
@@ -27,9 +32,9 @@ fn main() {
         "Filtered training set to {} samples with non-zero inputs.",
         filtered_train.len()
     );
-
-    let layer_sizes = vec![784, 128, 64, 10]; // [input, hidden1, hidden2, output]
-    let activations = vec![Activation::Sigmoid, Activation::Sigmoid]; // For hidden layers
+*/
+    let layer_sizes = vec![784, 256, 128, 64, 10]; // [input, hidden1, hidden2, output]
+    let activations = vec![Activation::Sigmoid, Activation::Sigmoid, Activation::Sigmoid]; // for hidden layers
 
     let mut network = initialize_network(&layer_sizes, &activations);
 
@@ -43,8 +48,8 @@ fn main() {
     }
 
     let learning_rate = 0.1;
-    let epochs = 10;
-    train(&mut network, &filtered_train, epochs, learning_rate, &test_set);
+    let epochs = 100;
+    train(&mut network, &train_set, epochs, learning_rate, &test_set);
 
     if let Some(neuron) = network[1].neurons.get(0) {
         info!(
