@@ -1,5 +1,4 @@
-
-
+use crate::network::activation::Activation;
 use ndarray::Array1;
 use ndarray_rand::RandomExt;
 use ndarray_rand::rand_distr::Uniform;
@@ -15,22 +14,28 @@ pub struct Neuron {
 }
 
 impl Neuron {
-    pub fn new(num_inputs: usize, activation: &str) -> Self {
-        let scale = match activation {
-            "sigmoid" => (1.0 / num_inputs as f32).sqrt(),
-            _ => 0.5,
-        };
+    pub fn new(num_inputs: usize, activation: Option<&Activation>) -> Self {
+         let (weights, bias) = if num_inputs > 0 {
+            let activation = activation.expect("Activation must be provided for non-input layers.");
+            let scale = match activation {
+                Activation::Sigmoid | Activation::Softmax => (1.0 / num_inputs as f32).sqrt(),
+                Activation::ReLU => (2.0 / num_inputs as f32).sqrt(),
+            };
 
-        let weights = if num_inputs > 0 {
-            let mut rng = rand::thread_rng();
-            Array1::random_using(num_inputs, Uniform::new(-scale, scale), &mut rng)
+            let weights = {
+                let mut rng = rand::thread_rng();
+                Array1::random_using(num_inputs, Uniform::new(-scale, scale), &mut rng)
+            };
+
+            let bias = {
+                let mut rng = rand::thread_rng();
+                rng.gen_range(-scale..scale)
+            };
+
+            (weights, bias)
         } else {
-            Array1::zeros(0)
+            (Array1::zeros(0), 0.0)
         };
-
-        let mut rng = rand::thread_rng();
-        let bias = rng.gen_range(-scale..scale);
-
         Neuron {
             raw_value: 0.0,
             weights,
