@@ -1,5 +1,75 @@
 
-use rand::{thread_rng, Rng};
+use neural_net::data::loader::load_mnist;
+use neural_net::network::initialize_network;
+use neural_net::training::trainer::train;
+use log::{info, error};
+use env_logger;
+
+fn main() {
+    env_logger::init();
+
+    let (train_set, test_set) = load_mnist();
+
+    info!("Loaded training samples: {}", train_set.len());
+    info!("Loaded testing samples: {}", test_set.len());
+
+    let num_training_samples = 1000;
+    let filtered_train = train_set
+        .into_iter()
+        .filter(|s| s.inputs.iter().any(|&v| v > 0.0)) // Ensure non-zero inputs
+        .take(num_training_samples)
+        .collect::<Vec<_>>();
+
+    info!(
+        "Filtered training set to {} samples with non-zero inputs.",
+        filtered_train.len()
+    );
+
+    let layer_sizes = vec![784, 128, 10]; // [input, hidden, output]
+    let mut network = initialize_network(&layer_sizes);
+
+    if let Some(neuron) = network[1].neurons.get(0) {
+        info!(
+            "Initial Hidden Layer Neuron 0 - Weight[0]: {:.6}, Bias: {:.6}",
+            neuron.weights[0], neuron.bias
+        );
+    } else {
+        error!("Hidden layer does not have any neurons.");
+    }
+
+    let learning_rate = 0.1;
+    let epochs = 10;
+    train(&mut network, &filtered_train, epochs, learning_rate, &test_set);
+
+    if let Some(neuron) = network[1].neurons.get(0) {
+        info!(
+            "Updated Hidden Layer Neuron 0 - Weight[0]: {:.6}, Bias: {:.6}",
+            neuron.weights[0], neuron.bias
+        );
+    } else {
+        error!("Hidden layer does not have any neurons.");
+    }
+
+    info!("Training complete.");
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*use rand::{thread_rng, Rng};
 use rand::seq::SliceRandom;
 use mnist::MnistBuilder;
 
@@ -408,4 +478,5 @@ fn main() {
 
     println!("Done training.");
 }
+*/
 

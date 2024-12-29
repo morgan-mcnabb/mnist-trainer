@@ -3,113 +3,85 @@ use crate::network::activation;
 use crate::data::dataset::Sample;
 use crate::utils::math::shuffle_dataset;
 use crate::metrics::accuracy::evaluate;
+use ndarray::Array1;
 
-/// Performs a forward pass through the network.
-fn forward_pass(layers: &mut [Layer], inputs: &[f32]) {
+pub fn forward_pass(layers: &mut [Layer], inputs: &Array1<f32>) {
     let total_layers = layers.len();
 
-    // Input layer activations
     for (i, neuron) in layers[0].neurons.iter_mut().enumerate() {
         neuron.raw_value = inputs[i];
         neuron.activated_value = inputs[i];
     }
 
-    // Hidden and output layers
     for l in 1..total_layers {
-        let prev_activations: Vec<f32> = layers[l - 1]
-            .neurons
-            .iter()
-            .map(|n| n.activated_value)
-            .collect();
+        let prev_activations = layers[l - 1].activated_values();
 
         let is_not_output = l < (total_layers - 1);
 
         for neuron in &mut layers[l].neurons {
-            let weighted_sum: f32 = neuron
-                .weights
-                .iter()
-                .zip(prev_activations.iter())
-                .map(|(w, a)| w * a)
-                .sum::<f32>()
-                + neuron.bias;
-
+            let weighted_sum = neuron.weights.dot(&prev_activations) + neuron.bias;
             neuron.raw_value = weighted_sum;
             neuron.activated_value = if is_not_output {
                 activation::sigmoid(weighted_sum)
             } else {
-                weighted_sum // Softmax will be applied later
+                weighted_sum // softmax will be applied later
             };
         }
     }
 
-    // Apply softmax to the output layer
-    let output_idx = total_layers - 1;
-    let raw_outputs: Vec<f32> = layers[output_idx]
+    // apply softmax now
+    let output_index = total_layers - 1;
+    let raw_outputs: Array1<f32> = layers[output_index]
         .neurons
         .iter()
         .map(|n| n.raw_value)
         .collect();
+    let softmax_values = activation::softmax(&raw_outputs);
 
-    let softmax_vals = activation::softmax(&raw_outputs);
-
-    for (neuron, &val) in layers[output_idx].neurons.iter_mut().zip(softmax_vals.iter()) {
+    for (neuron, &val) in layers[output_index].neurons.iter_mut().zip(softmax_values.iter()) {
         neuron.activated_value = val;
     }
 }
 
-/// Performs backpropagation and updates weights and biases.
-fn back_propagate(layers: &mut [Layer], targets: &[f32], lr: f32) {
-    let out_idx = layers.len() - 1;
+pub fn back_propagate(layers: &mut [Layer], targets: &Array1<f32>, learning_rate: f32) {
+    let output_index = layers.len() - 1;
 
-    // 1. Calculate deltas for output layer
-    for (i, neuron) in layers[out_idx].neurons.iter_mut().enumerate() {
+    for (i, neuron) in layers[output_index].neurons.iter_mut().enumerate() {
         neuron.delta = neuron.activated_value - targets[i];
     }
 
-    // 2. Calculate deltas for hidden layers
-    for l in (1..out_idx).rev() {
+    for l in (1..output_index).rev() {
+        let next_layer_deltas: Vec<f32> = layers[l + 1].neurons.iter().map(|n| n.delta).collect();
+        let next_layer_weights: Vec<Vec<f32>> = layers[l + 1].neurons.iter().map(|n| n.weights.to_vec()).collect();
+
         for (j, neuron) in layers[l].neurons.iter_mut().enumerate() {
-            let sum: f32 = layers[l + 1]
-                .neurons
-                .iter()
-                .map(|n| n.delta * n.weights[j])
-                .sum();
+            let sum: f32 = next_layer_deltas.iter().zip(next_layer_weights.iter()).map(|(delta, weights)| delta * weights[j]).sum();
             neuron.delta = sum * activation::sigmoid_derivative(neuron.raw_value);
         }
     }
 
-    // 3. Update weights and biases
     for l in 1..layers.len() {
-        let prev_activations: Vec<f32> = layers[l - 1]
-            .neurons
-            .iter()
-            .map(|n| n.activated_value)
-            .collect();
+        let prev_activations = layers[l - 1].activated_values();
 
         for neuron in &mut layers[l].neurons {
-            // Update bias
-            neuron.bias -= lr * neuron.delta;
+            neuron.bias -= learning_rate * neuron.delta;
 
-            // Update weights
-            for (k, weight) in neuron.weights.iter_mut().enumerate() {
-                *weight -= lr * neuron.delta * prev_activations[k];
-            }
+            let gradient = &prev_activations * neuron.delta;
+            neuron.weights = &neuron.weights - &(gradient * learning_rate);
         }
     }
 }
 
-/// Calculates cross-entropy loss for the current output.
-fn calculate_loss(layers: &[Layer], targets: &[f32]) -> f32 {
-    let out_idx = layers.len() - 1;
-    layers[out_idx]
+fn calculate_loss(layers: &[Layer], targets: &Array1<f32>) -> f32 {
+    let output_index = layers.len() - 1;
+    layers[output_index]
         .neurons
         .iter()
         .zip(targets.iter())
-        .map(|(n, &t)| -t * (n.activated_value + 1e-12).ln())
+        .map(|(neuron, &target)| -target * (neuron.activated_value + 1e-12).ln())
         .sum()
 }
 
-/// The main training loop.
 pub fn train(
     layers: &mut [Layer],
     training_set: &[Sample],
@@ -118,7 +90,6 @@ pub fn train(
     test_set: &[Sample],
 ) {
     for epoch in 0..epochs {
-        // Shuffle the training data
         let mut shuffled = training_set.to_vec();
         shuffle_dataset(&mut shuffled);
 
@@ -129,7 +100,6 @@ pub fn train(
             total_loss += calculate_loss(layers, &sample.target);
         }
 
-        // Evaluate accuracy
         let train_acc = evaluate(layers, training_set);
         let test_acc = evaluate(layers, test_set);
 
@@ -142,4 +112,3 @@ pub fn train(
         );
     }
 }
-

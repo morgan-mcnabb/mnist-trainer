@@ -1,10 +1,10 @@
+
 pub mod neuron;
 pub mod layer;
 pub mod activation;
 
 use crate::network::layer::Layer;
 
-/// Initializes the neural network based on the provided layer sizes.
 pub fn initialize_network(layer_sizes: &[usize]) -> Vec<Layer> {
     let mut layers = Vec::new();
 

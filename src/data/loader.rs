@@ -1,8 +1,8 @@
-use rand::seq::SliceRandom;
-use mnist::{Mnist, MnistBuilder};
-use crate::data::dataset::Sample;
 
-pub fn load_mnist() -> (Vec<Sample>, Vec<Sample>) {
+use crate::data::dataset;
+use mnist::MnistBuilder;
+
+pub fn load_mnist() -> (Vec<dataset::Sample>, Vec<dataset::Sample>) {
     let mnist = MnistBuilder::new()
         .label_format_digit()
         .training_set_length(50_000)
@@ -16,3 +16,4 @@ pub fn load_mnist() -> (Vec<Sample>, Vec<Sample>) {
 
     (train_set, test_set)
 }
+
