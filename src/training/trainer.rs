@@ -108,22 +108,10 @@ pub fn train(
         let mut shuffled = training_set.to_vec();
         shuffle_dataset(&mut shuffled);
 
-        let mut total_loss = 0.0;
         for sample in shuffled.iter() {
             forward_pass(layers, &sample.inputs);
             back_propagate(layers, &sample.target, learning_rate);
-            total_loss += calculate_loss(layers, &sample.target);
         }
 
-        let train_acc = evaluate(layers, training_set);
-        let test_acc = evaluate(layers, test_set);
-
-        println!(
-            "Epoch {}: Loss = {:.4}, Train Acc = {:.2}%, Test Acc = {:.2}%",
-            epoch + 1,
-            total_loss / training_set.len() as f32,
-            train_acc,
-            test_acc
-        );
-    }
+        }
 }

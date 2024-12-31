@@ -29,10 +29,17 @@ pub struct AppState {
 
     #[serde(skip)]
     pub texture_cache: HashMap<usize, egui::TextureHandle>,
+
+    #[serde(skip)]
+    pub test_set: Vec<Sample>,
+
+    #[serde(skip)]
+    pub train_set: Vec<Sample>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+
         Self {
             config: Config::default(),
             training: false,
@@ -47,6 +54,8 @@ impl Default for AppState {
             prediction_result: None,
             needs_repaint: false,
             texture_cache: std::collections::HashMap::new(),
+            test_set: Vec::new(),
+            train_set: Vec::new(),
         }
     }
 }
@@ -57,8 +66,14 @@ pub struct GuiApp {
 
 impl Default for GuiApp {
     fn default() -> Self {
+        let (train_set, test_set) = load_mnist();
+
         Self {
-            state: Arc::new(Mutex::new(AppState::default())),
+            state: Arc::new(Mutex::new(AppState {
+                train_set,
+                test_set,
+                ..AppState::default()
+            })),
         }
     }
 }
@@ -158,63 +173,60 @@ impl eframe::App for GuiApp {
                     }
 
                     thread::spawn(move || {
-                        { 
-                            println!("DEBUG: Training thread started. Attempting to lock state_clone...");
-                            let mut state_lock = state_clone.lock().unwrap();
-                            let config = state_lock.config.clone();
-                            drop(state_lock);
 
+                        let (config, train_set, test_set) = {
+                            let state_lock = state_clone.lock().unwrap();
+                            (
+                                state_lock.config.clone(),
+                                state_lock.train_set.clone(),
+                                state_lock.test_set.clone(),
+                            )
+                        };
+                        
+                        let activations = config
+                            .activations
+                            .iter()
+                            .map(|s| match s.as_str() {
+                                "sigmoid" => Activation::Sigmoid,
+                                "relu" => Activation::ReLU,
+                                "softmax" => Activation::Softmax,
+                                _ => Activation::Sigmoid, 
+                            })
+                            .collect::<Vec<_>>();
 
-                            println!("DEBUG: Successfully locked state. Cloning config...");
-                            println!("DEBUG: Dropped lock, now loading MNIST...");
+                        let mut network = initialize_network(&config.layers, &activations);
 
-                            let (train_set, test_set) = load_mnist();
-                            
-                            let activations = config
-                                .activations
-                                .iter()
-                                .map(|s| match s.as_str() {
-                                    "sigmoid" => Activation::Sigmoid,
-                                    "relu" => Activation::ReLU,
-                                    "softmax" => Activation::Softmax,
-                                    _ => Activation::Sigmoid, 
-                                })
-                                .collect::<Vec<_>>();
-
-                            let mut network = initialize_network(&config.layers, &activations);
-
-                            for epoch in 0..config.epochs {
-                                {
-                                    let mut state_lock  = state_clone.lock().unwrap();
-                                    state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
-                                    state_lock.progress = (epoch as f32 / config.epochs as f32) * 100.0;
-                                }
-
-                                train(&mut network, &train_set, 1, config.learning_rate, &test_set);
-
-                                {
-                                    let mut state_lock = state_clone.lock().unwrap();
-                                    state_lock.train_accuracy = evaluate(&mut network, &train_set);
-                                    state_lock.test_accuracy = evaluate(&mut network, &test_set);
-                                    let train_acc = state_lock.train_accuracy;
-                                    let test_acc = state_lock.test_accuracy;
-                                    state_lock.train_accuracy_history.push(train_acc);
-                                    state_lock.test_accuracy_history.push(test_acc);
-                                    state_lock.network = Some(network.clone()); 
-                                    state_lock.needs_repaint = true;
-                                }
-
-                                std::thread::sleep(std::time::Duration::from_millis(10));
+                        for epoch in 0..config.epochs {
+                            {
+                                let mut state_lock  = state_clone.lock().unwrap();
+                                state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
+                                state_lock.progress = (epoch as f32 / config.epochs as f32) * 100.0;
                             }
+
+                            train(&mut network, &train_set, 1, config.learning_rate, &test_set);
 
                             {
                                 let mut state_lock = state_clone.lock().unwrap();
-                                state_lock.progress = 100.0;
-                                state_lock.status = "Training complete".to_string();
-                                state_lock.training = false;
-                                state_lock.network = Some(network);
+                                state_lock.train_accuracy = evaluate(&mut network, &train_set);
+                                state_lock.test_accuracy = evaluate(&mut network, &test_set);
+                                let train_acc = state_lock.train_accuracy;
+                                let test_acc = state_lock.test_accuracy;
+                                state_lock.train_accuracy_history.push(train_acc);
+                                state_lock.test_accuracy_history.push(test_acc);
+                                state_lock.network = Some(network.clone()); 
                                 state_lock.needs_repaint = true;
                             }
+
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+
+                        {
+                            let mut state_lock = state_clone.lock().unwrap();
+                            state_lock.progress = 100.0;
+                            state_lock.status = "Training complete".to_string();
+                            state_lock.training = false;
+                            state_lock.network = Some(network);
+                            state_lock.needs_repaint = true;
                         }
                     });
                 }
@@ -304,24 +316,21 @@ impl eframe::App for GuiApp {
 
             
             ui.collapsing("Make a Prediction", |ui| {
-                println!("Make a prediction clicked");
                 let (network_exists, _selected_index) = {
                     let state_lock = self.state.lock().unwrap();
                     (state_lock.network.is_some(), state_lock.selected_sample_index)
                 };
 
-                println!("before network exists if statement");
                 if network_exists {
-                    println!("loading mnist");
-                    let test_set = load_mnist().1;
-                    println!("loading_mnist done");
+                    let test_set = {
+                        let state_lock = self.state.lock().unwrap();
+                        state_lock.test_set.clone()
+                    };
                     if !test_set.is_empty() {
                         ui.horizontal(|ui| {
                             ui.label("Select Test Sample Index:");
                             let mut state_lock = self.state.lock().unwrap();
-                            println!("before drag value calculated");
                             ui.add(egui::DragValue::new(&mut state_lock.selected_sample_index).range(0..=test_set.len()-1));
-                            println!("after drag value calculated");
                         });
 
                         let new_selected_index = {
@@ -348,17 +357,6 @@ impl eframe::App for GuiApp {
                                     texture
                                 }
                             };
-                            /*println!("before convert to image");
-                            let image = convert_to_image(&sample.inputs);
-                            println!("after convert to image");
-                            let texture_id = ui.ctx().load_texture(
-                                "sample_image",
-                                egui::ColorImage::from_rgb([28, 28], &image),
-                                Default::default(),
-                            );
-                            println!("after load texture");
-
-                            println!("DEBUG: calling image");*/
 
                             ui.image(&texture_id); 
 
@@ -382,12 +380,12 @@ impl eframe::App for GuiApp {
                                 }
                             }
 
-                            let pred_res = {
+                            let prediction = {
                                 let state_lock = self.state.lock().unwrap();
                                 state_lock.prediction_result
                             };
-                            if let Some((pred, actual)) = pred_res {
-                                ui.label(format!("Prediction: {}", pred));
+                            if let Some((prediction_result, actual)) = prediction {
+                                ui.label(format!("Prediction: {}", prediction_result));
                                 ui.label(format!("Actual Label: {}", actual));
                             }
                         } else {
@@ -423,6 +421,8 @@ fn predict(layers: &[crate::network::layer::Layer], sample: &Sample) -> usize {
 }
 
 fn convert_to_image(inputs: &ndarray::Array1<f32>) -> Vec<u8> {
+    // was doing [pixel, pixel] instead of [pixel, pixel, pixel]
+    // hours wasted: 4
        inputs.iter().flat_map(|&v| {
            let pixel = (v * 255.0) as u8;
            [pixel, pixel, pixel]
