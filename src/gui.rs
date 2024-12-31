@@ -64,7 +64,40 @@ impl eframe::App for GuiApp {
                     ui.label("Learning Rate:");
                     ui.add(egui::DragValue::new(&mut state.config.learning_rate).clamp_range(0.0001..=1.0));
                 });
+
+                let mut layers_input = state
+                    .config
+                    .layers
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+
+                if ui
+                    .add(egui::TextEdit::singleline(&mut layers_input).hint_text("e.g. 784,512,256,64,10"))
+                    .changed() {
+                        state.config.layers = layers_input
+                            .split(",")
+                            .map(|s| s.trim().parse().unwrap_or(0))
+                            .collect();
+                }
+
+                let mut activations_input = state
+                    .config
+                    .activations
+                    .join(",");
+
+                if ui
+                    .add(egui::TextEdit::singleline(&mut activations_input).hint_text("e.g. sigmoid,relu,sigmoid"))
+                        .changed() {
+                            state.config.activations = activations_input
+                                .split(",")
+                                .map(|s| s.trim().to_lowercase())
+                                .collect();
+                }
             });
+
+            ui.separator();
         });
     }
 }
