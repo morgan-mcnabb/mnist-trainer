@@ -1,8 +1,9 @@
 use crate::network::activation::Activation;
 use crate::network::neuron::Neuron;
 use ndarray::Array1;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
     pub neurons: Vec<Neuron>,
     pub activation: Option<Activation>,

@@ -3,8 +3,9 @@ use ndarray::Array1;
 use ndarray_rand::RandomExt;
 use ndarray_rand::rand_distr::Uniform;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Neuron {
     pub raw_value: f32,       
     pub weights: Array1<f32>, 
