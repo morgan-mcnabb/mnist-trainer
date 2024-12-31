@@ -9,6 +9,8 @@ use crate::metrics::accuracy::evaluate;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
 pub struct AppState {
@@ -24,6 +26,9 @@ pub struct AppState {
     pub selected_sample_index: usize,
     pub prediction_result: Option<(usize, usize)>,
     pub needs_repaint: bool,
+
+    #[serde(skip)]
+    pub texture_cache: HashMap<usize, egui::TextureHandle>,
 }
 
 impl Default for AppState {
@@ -41,6 +46,7 @@ impl Default for AppState {
             selected_sample_index: 0,
             prediction_result: None,
             needs_repaint: false,
+            texture_cache: std::collections::HashMap::new(),
         }
     }
 }
@@ -71,6 +77,10 @@ impl eframe::App for GuiApp {
             let mut state_lock =  self.state.lock().unwrap();
             ctx.request_repaint();
             state_lock.needs_repaint = false;
+        }
+
+        if training {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -295,7 +305,7 @@ impl eframe::App for GuiApp {
             
             ui.collapsing("Make a Prediction", |ui| {
                 println!("Make a prediction clicked");
-                let (network_exists, selected_index) = {
+                let (network_exists, _selected_index) = {
                     let state_lock = self.state.lock().unwrap();
                     (state_lock.network.is_some(), state_lock.selected_sample_index)
                 };
@@ -304,11 +314,14 @@ impl eframe::App for GuiApp {
                 if network_exists {
                     println!("loading mnist");
                     let test_set = load_mnist().1;
+                    println!("loading_mnist done");
                     if !test_set.is_empty() {
                         ui.horizontal(|ui| {
                             ui.label("Select Test Sample Index:");
                             let mut state_lock = self.state.lock().unwrap();
+                            println!("before drag value calculated");
                             ui.add(egui::DragValue::new(&mut state_lock.selected_sample_index).range(0..=test_set.len()-1));
+                            println!("after drag value calculated");
                         });
 
                         let new_selected_index = {
@@ -318,18 +331,34 @@ impl eframe::App for GuiApp {
 
                         if new_selected_index < test_set.len() {
                             let sample = &test_set[new_selected_index];
-                            let image = convert_to_image(&sample.inputs);
 
+                            let texture_id = {
+                                let mut state_lock = self.state.lock().unwrap();
+                                if let Some(texture) = state_lock.texture_cache.get(&new_selected_index) {
+                                    texture.clone()
+                                } else {
+                                    let image = convert_to_image(&sample.inputs);
+                                    let texture = ui.ctx().load_texture(
+                                        format!("sample_image_{}", new_selected_index),
+                                        egui::ColorImage::from_rgb([28, 28], &image),
+                                        egui::TextureOptions::NEAREST,
+                                    );
+
+                                    state_lock.texture_cache.insert(new_selected_index, texture.clone());
+                                    texture
+                                }
+                            };
+                            /*println!("before convert to image");
+                            let image = convert_to_image(&sample.inputs);
+                            println!("after convert to image");
                             let texture_id = ui.ctx().load_texture(
                                 "sample_image",
                                 egui::ColorImage::from_rgb([28, 28], &image),
-                                egui::TextureOptions {
-                                    magnification: egui::TextureFilter::Nearest,
-                                    minification: egui::TextureFilter::Nearest,
-                                    wrap_mode: egui::TextureWrapMode::ClampToEdge,
-                                    mipmap_mode: None,
-                                },
+                                Default::default(),
                             );
+                            println!("after load texture");
+
+                            println!("DEBUG: calling image");*/
 
                             ui.image(&texture_id); 
 
@@ -394,5 +423,8 @@ fn predict(layers: &[crate::network::layer::Layer], sample: &Sample) -> usize {
 }
 
 fn convert_to_image(inputs: &ndarray::Array1<f32>) -> Vec<u8> {
-    inputs.iter().map(|&v| (v * 255.0) as u8).collect()
+       inputs.iter().flat_map(|&v| {
+           let pixel = (v * 255.0) as u8;
+           [pixel, pixel, pixel]
+       }).collect()
 }
