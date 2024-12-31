@@ -1,15 +1,22 @@
 
-use neural_net::data::loader::load_mnist;
-use neural_net::network::initialize_network;
-use neural_net::network::layer::Layer;
-use neural_net::data::dataset::Sample;
-use neural_net::network::activation::Activation;
-use neural_net::training::trainer::{train, forward_pass};
-use log::{info, error};
-use env_logger;
-use rand::thread_rng;
-use rand::seq::SliceRandom;
+use eframe::NativeOptions;
+use neural_net::gui::GuiApp;
+use std::panic;
 
+fn main() {
+    let native_options = NativeOptions::default();
+    panic::set_hook(Box::new(|info| {
+        // Print or log the panic info
+        println!("Panic occurred: {:?}", info);
+    }));
+    let _ =eframe::run_native(
+        "Neural Network GUI",
+        native_options,
+        Box::new(|_cc| Ok(Box::new(GuiApp::default()))),
+    );
+}
+
+/*
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -88,4 +95,4 @@ fn predict(layers: &mut [Layer], sample: &Sample) -> usize {
         .max_by(|a, b| a.1.activated_value.partial_cmp(&b.1.activated_value).unwrap())
         .map(|(idx, _)| idx)
         .unwrap_or(0)
-}
+}*/
