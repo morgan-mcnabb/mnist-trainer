@@ -17,7 +17,6 @@ use std::collections::HashMap;
 pub enum TrainingState {
     Idle,
     Training,
-    Stopped,
     Paused,
     Complete,
 }
@@ -174,11 +173,10 @@ impl eframe::App for GuiApp {
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.button("Start Training").clicked() && training_state != TrainingState::Training {  
+                if ui.button("Start Training").clicked() && training_state == TrainingState::Idle {  
                     let state_clone = Arc::clone(&self.state);
                     {
                         let mut state_lock = state_clone.lock().unwrap();
-                        //state_lock.training = true;
                         state_lock.training_state = TrainingState::Training;
                         state_lock.status = "Training started".to_string();
                         state_lock.train_accuracy_history.clear();
@@ -213,12 +211,51 @@ impl eframe::App for GuiApp {
                             
                             {
                                 let mut state_lock = state_clone.lock().unwrap();
-                                if state_lock.training_state == TrainingState::Stopped {
-                                    state_lock.status = "Training stopped by user.".to_string();
-                                    state_lock.training_state = TrainingState::Idle;
-                                    state_lock.needs_repaint = true;
-                                    return;
+                                match state_lock.training_state {
+                                    TrainingState::Paused => {
+                                        state_lock.status = "Training paused.".to_string();
+                                        state_lock.needs_repaint = true;
+                                    }
+                                    TrainingState::Idle => {
+                                        state_lock.status = "Training halted.".to_string();
+                                        state_lock.needs_repaint = true;
+                                        return;
+                                    }
+                                    TrainingState::Complete => {
+                                        state_lock.status = "Training completed.".to_string();
+                                        state_lock.needs_repaint = true;
+                                        return;
+                                    }
+                                    _ => {
+                                        // keep training, idiot
+                                    }
                                 }
+                            }
+
+                            // if it is paused, this thread will wait until 
+                            // the state changes
+                            loop {
+                                {
+                                    let mut state_lock = state_clone.lock().unwrap();
+                                    match state_lock.training_state {
+                                        TrainingState::Training => {
+                                            state_lock.status = format!("Resuming training... Epoch {}/{}", epoch + 1, config.epochs);
+                                            break; // this resumes training
+                                        }
+                                        TrainingState::Complete => {
+                                            state_lock.status = "Training completed.".to_string();
+                                            state_lock.needs_repaint = true;
+                                            return;
+                                        }
+                                        TrainingState::Idle => {
+                                            state_lock.status = "Training halted.".to_string();
+                                            state_lock.needs_repaint = true;
+                                            return;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                thread::sleep(Duration::from_millis(100));
                             }
 
 
@@ -242,29 +279,57 @@ impl eframe::App for GuiApp {
                                 state_lock.needs_repaint = true;
                             }
 
-                            std::thread::sleep(Duration::from_millis(10));
+                            thread::sleep(Duration::from_millis(10));
                         }
 
                         {
                             let mut state_lock = state_clone.lock().unwrap();
                             state_lock.progress = 100.0;
                             state_lock.status = "Training complete".to_string();
-                            state_lock.training_state = TrainingState::Idle;
+                            state_lock.training_state = TrainingState::Complete;
                             state_lock.network = Some(network);
                             state_lock.needs_repaint = true;
                         }
                     });
                 }
 
-                if ui.button("Stop Training").clicked() && training_state == TrainingState::Training {
-                    {
-                        let mut state_lock = self.state.lock().unwrap();
-                        state_lock.training_state = TrainingState::Stopped;
-                        state_lock.status = "Stopping training...".to_string();
-                    }
-                }
+                match training_state {
+                    TrainingState::Training => {
+                        if ui.button("Pause Training").clicked() {
+                            let mut state_lock = self.state.lock().unwrap();
+                            state_lock.training_state = TrainingState::Paused;
+                            state_lock.status = "Pausing training...".to_string();
 
-                if ui.button("Save Model").clicked() {
+                        }
+
+                        if ui.button("Stop Training").clicked() {
+                            let mut state_lock = self.state.lock().unwrap();
+                            state_lock.training_state = TrainingState::Idle;
+                            state_lock.status = "Stopping training...".to_string();
+                        }
+                    }
+                    TrainingState::Paused => {
+                        if ui.button("Resume Training").clicked() {
+                            let mut state_lock = self.state.lock().unwrap();
+                            state_lock.training_state = TrainingState::Training;
+                            state_lock.status = "Resuming training...".to_string();
+                        }
+
+                        if ui.button("Stop Training").clicked() {
+                            let mut state_lock = self.state.lock().unwrap();
+                            state_lock.training_state = TrainingState::Idle;
+                            state_lock.status = "Stopping training...".to_string();
+                        }
+                    }
+                    _ => {
+                        ui.add_enabled(false, egui::Button::new("Pause Training"));
+                        ui.add_enabled(false, egui::Button::new("Stop Training"));
+                    }
+
+                    }
+
+
+               if ui.button("Save Model").clicked() {
                     let mut state_lock = self.state.lock().unwrap();
                     if let Some(ref network) = state_lock.network {
                         let serialized = serde_json::to_string(network).unwrap();
@@ -291,9 +356,20 @@ impl eframe::App for GuiApp {
                 }
             });
 
+            let status_color = match training_state {
+                TrainingState::Idle => egui::Color32::BLUE,
+                TrainingState::Training => egui::Color32::GOLD,
+                TrainingState::Paused => egui::Color32::ORANGE,
+                TrainingState::Complete => egui::Color32::GREEN,
+            };
+
             ui.horizontal(|ui| {
                 ui.label("Status:");
-                ui.label(&status);
+                ui.label(
+                    egui::RichText::new(&status)
+                    .color(status_color)
+                    .strong(),
+                );
             });
 
             let progress = {
