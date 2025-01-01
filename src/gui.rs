@@ -2,8 +2,9 @@ use eframe::egui;
 use crate::config::Config;
 use crate::data::loader::load_mnist;
 use crate::network::initialize_network;
+use crate::network::layer::Layer;
 use crate::network::activation::Activation;
-use crate::training::trainer::train;
+use crate::training::trainer::{train, forward_pass};
 use crate::data::dataset::Sample;
 use crate::metrics::accuracy::evaluate;
 use serde::{Deserialize, Serialize};
@@ -407,9 +408,9 @@ impl eframe::App for GuiApp {
 
     }}
 
-fn predict(layers: &[crate::network::layer::Layer], sample: &Sample) -> usize {
+fn predict(layers: &[Layer], sample: &Sample) -> usize {
     let mut layers = layers.to_vec(); 
-    crate::training::trainer::forward_pass(&mut layers, &sample.inputs);
+    forward_pass(&mut layers, &sample.inputs);
     let output_index = layers.len() - 1;
     layers[output_index]
         .neurons
