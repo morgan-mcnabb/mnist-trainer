@@ -13,6 +13,15 @@ use std::thread;
 use std::time::Duration;
 use std::collections::HashMap;
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+pub enum TrainingState {
+    Idle,
+    Training,
+    Stopped,
+    Paused,
+    Complete,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct AppState {
     pub config: Config,
@@ -27,6 +36,7 @@ pub struct AppState {
     pub selected_sample_index: usize,
     pub prediction_result: Option<(usize, usize)>,
     pub needs_repaint: bool,
+    pub training_state: TrainingState,
 
     #[serde(skip)]
     pub texture_cache: HashMap<usize, egui::TextureHandle>,
@@ -36,6 +46,7 @@ pub struct AppState {
 
     #[serde(skip)]
     pub train_set: Vec<Sample>,
+
 }
 
 impl Default for AppState {
@@ -57,6 +68,7 @@ impl Default for AppState {
             texture_cache: std::collections::HashMap::new(),
             test_set: Vec::new(),
             train_set: Vec::new(),
+            training_state: TrainingState::Idle,
         }
     }
 }
@@ -84,9 +96,9 @@ impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
 
         // forgot to drop this lock. hours wasted: 8
-        let (training, needs_repaint, status) = {
+        let (training_state, needs_repaint, status) = {
             let state_lock = self.state.lock().unwrap();
-            (state_lock.training, state_lock.needs_repaint, state_lock.status.clone())
+            (state_lock.training_state, state_lock.needs_repaint, state_lock.status.clone())
         };
 
         if needs_repaint {
@@ -95,7 +107,7 @@ impl eframe::App for GuiApp {
             state_lock.needs_repaint = false;
         }
 
-        if training {
+        if training_state == TrainingState::Training {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
@@ -162,12 +174,12 @@ impl eframe::App for GuiApp {
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.button("Start Training").clicked() && !training {
-                    
+                if ui.button("Start Training").clicked() && training_state != TrainingState::Training {  
                     let state_clone = Arc::clone(&self.state);
                     {
                         let mut state_lock = state_clone.lock().unwrap();
-                        state_lock.training = true;
+                        //state_lock.training = true;
+                        state_lock.training_state = TrainingState::Training;
                         state_lock.status = "Training started".to_string();
                         state_lock.train_accuracy_history.clear();
                         state_lock.test_accuracy_history.clear();
@@ -198,13 +210,25 @@ impl eframe::App for GuiApp {
                         let mut network = initialize_network(&config.layers, &activations);
 
                         for epoch in 0..config.epochs {
+                            
+                            {
+                                let mut state_lock = state_clone.lock().unwrap();
+                                if state_lock.training_state == TrainingState::Stopped {
+                                    state_lock.status = "Training stopped by user.".to_string();
+                                    state_lock.training_state = TrainingState::Idle;
+                                    state_lock.needs_repaint = true;
+                                    return;
+                                }
+                            }
+
+
                             {
                                 let mut state_lock  = state_clone.lock().unwrap();
                                 state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
                                 state_lock.progress = (epoch as f32 / config.epochs as f32) * 100.0;
                             }
 
-                            train(&mut network, &train_set, 1, config.learning_rate, &test_set);
+                            train(&mut network, &train_set, 1, config.learning_rate);
 
                             {
                                 let mut state_lock = state_clone.lock().unwrap();
@@ -218,18 +242,26 @@ impl eframe::App for GuiApp {
                                 state_lock.needs_repaint = true;
                             }
 
-                            std::thread::sleep(std::time::Duration::from_millis(10));
+                            std::thread::sleep(Duration::from_millis(10));
                         }
 
                         {
                             let mut state_lock = state_clone.lock().unwrap();
                             state_lock.progress = 100.0;
                             state_lock.status = "Training complete".to_string();
-                            state_lock.training = false;
+                            state_lock.training_state = TrainingState::Idle;
                             state_lock.network = Some(network);
                             state_lock.needs_repaint = true;
                         }
                     });
+                }
+
+                if ui.button("Stop Training").clicked() && training_state == TrainingState::Training {
+                    {
+                        let mut state_lock = self.state.lock().unwrap();
+                        state_lock.training_state = TrainingState::Stopped;
+                        state_lock.status = "Stopping training...".to_string();
+                    }
                 }
 
                 if ui.button("Save Model").clicked() {
