@@ -1,7 +1,6 @@
 use crate::network::layer::Layer;
 use crate::data::dataset::Sample;
 use crate::utils::math::shuffle_dataset;
-use crate::metrics::accuracy::evaluate;
 use ndarray::Array1;
 use crate::network::activation::{Activation,softmax};
 
@@ -87,7 +86,7 @@ pub fn back_propagate(layers: &mut [Layer], targets: &Array1<f32>, learning_rate
     }
 }
 
-fn calculate_loss(layers: &[Layer], targets: &Array1<f32>) -> f32 {
+/*fn calculate_loss(layers: &[Layer], targets: &Array1<f32>) -> f32 {
     let output_index = layers.len() - 1;
     layers[output_index]
         .neurons
@@ -95,16 +94,16 @@ fn calculate_loss(layers: &[Layer], targets: &Array1<f32>) -> f32 {
         .zip(targets.iter())
         .map(|(neuron, &target)| -target * (neuron.activated_value + 1e-12).ln())
         .sum()
-}
+}*/
 
 pub fn train(
     layers: &mut [Layer],
     training_set: &[Sample],
     epochs: usize,
     learning_rate: f32,
-    test_set: &[Sample],
+    //test_set: &[Sample],
 ) {
-    for epoch in 0..epochs {
+    for _ in 0..epochs {
         let mut shuffled = training_set.to_vec();
         shuffle_dataset(&mut shuffled);
 
