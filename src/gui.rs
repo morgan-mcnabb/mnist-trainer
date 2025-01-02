@@ -88,20 +88,417 @@ impl Default for GuiApp {
     }
 }
 
+impl GuiApp {
+    fn ui_configuration(&self, ui: &mut egui::Ui) {
+        let mut state = self.state.lock().unwrap();
+
+        ui.collapsing("Configuration", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Epochs:");
+                ui.add(egui::DragValue::new(&mut state.config.epochs).range(1..=1000));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Learning Rate:");
+                ui.add(egui::DragValue::new(&mut state.config.learning_rate).range(0.0001..=1.0));
+            });
+
+            let mut layers_input = state
+                .config
+                .layers
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+                .join(",");
+            if ui
+                .add(egui::TextEdit::singleline(&mut layers_input).hint_text("e.g., 784,256,128,64,10"))
+                .changed()
+            {
+                state.config.layers = layers_input
+                    .split(',')
+                    .map(|s| s.trim().parse().unwrap_or(0))
+                    .collect();
+            }
+
+            let mut activations_input = state.config.activations.join(",");
+            if ui
+                .add(egui::TextEdit::singleline(&mut activations_input).hint_text("e.g., sigmoid,relu,relu"))
+                .changed()
+            {
+                state.config.activations = activations_input
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .collect();
+            }
+
+            if state.config.layers.len() < 2 {
+                ui.colored_label(egui::Color32::RED, "Error: At least two layers required (input and output).");
+            }
+            if state.config.activations.len() != state.config.layers.len() - 1 {
+                ui.colored_label(egui::Color32::RED, "Error: Number of activations must be one less than number of layers.");
+            }
+        });
+    }
+
+    fn ui_training_controls(&self, ui: &mut egui::Ui) {
+        let (training_state, progress) = {
+            let lock = self.state.lock().unwrap();
+            (lock.training_state, lock.progress)
+        };
+
+        ui.horizontal(|ui| {
+            let start_enabled = matches!(training_state, TrainingState::Idle | TrainingState::Complete);
+
+            if ui.add_enabled(start_enabled, egui::Button::new("Start Training")).clicked() && start_enabled {
+                let state_clone = Arc::clone(&self.state);
+                {
+                    let mut lock = state_clone.lock().unwrap();
+                    lock.training_state = TrainingState::Training;
+                    lock.status = "Training started".to_string();
+                    lock.train_accuracy_history.clear();
+                    lock.test_accuracy_history.clear();
+                }
+                self.spawn_training_thread(state_clone);
+            }
+
+            match training_state {
+                TrainingState::Training => {
+                    if ui.button("Pause Training").clicked() {
+                        let mut lock = self.state.lock().unwrap();
+                        lock.training_state = TrainingState::Paused;
+                        lock.status = "Pausing training...".to_string();
+                    }
+
+                    if ui.button("Stop Training").clicked() {
+                        let mut lock = self.state.lock().unwrap();
+                        lock.training_state = TrainingState::Idle;
+                        lock.status = "Stopping training...".to_string();
+                    }
+                }
+                TrainingState::Paused => {
+                    if ui.button("Resume Training").clicked() {
+                        let mut lock = self.state.lock().unwrap();
+                        lock.training_state = TrainingState::Training;
+                        lock.status = "Resuming training...".to_string();
+                    }
+
+                    if ui.button("Stop Training").clicked() {
+                        let mut lock = self.state.lock().unwrap();
+                        lock.training_state = TrainingState::Idle;
+                        lock.status = "Stopping training...".to_string();
+                    }
+                }
+                _ => {
+                    ui.add_enabled(false, egui::Button::new("Pause Training"));
+                    ui.add_enabled(false, egui::Button::new("Stop Training"));
+                }
+            }
+
+            if ui.button("Save Model").clicked() {
+                let mut lock = self.state.lock().unwrap();
+                if let Some(ref network) = lock.network {
+                    let serialized = serde_json::to_string(network).unwrap();
+                    std::fs::write("trained_model.json", serialized).expect("Unable to save model");
+                    lock.status = "Model saved successfully.".to_string();
+                } else {
+                    lock.status = "No trained network to save.".to_string();
+                }
+            }
+
+            if ui.button("Load Model").clicked() {
+                let mut lock = self.state.lock().unwrap();
+                let data = std::fs::read_to_string("trained_model.json");
+                match data {
+                    Ok(content) => {
+                        let network: Vec<Layer> = serde_json::from_str(&content).unwrap();
+                        lock.network = Some(network);
+                        lock.status = "Model loaded successfully.".to_string();
+                    }
+                    Err(_) => {
+                        lock.status = "Failed to load model.".to_string();
+                    }
+                }
+            }
+        });
+    }
+
+    fn ui_status(&self, ui: &mut egui::Ui, status: &str, training_state: TrainingState) {
+        let status_color = match training_state {
+            TrainingState::Idle => egui::Color32::BLUE,
+            TrainingState::Training => egui::Color32::GOLD,
+            TrainingState::Paused => egui::Color32::ORANGE,
+            TrainingState::Complete => egui::Color32::GREEN,
+        };
+
+        ui.horizontal(|ui| {
+            ui.label("Status:");
+            ui.label(
+                egui::RichText::new(status)
+                    .color(status_color)
+                    .strong(),
+            );
+        });
+    }
+
+    fn ui_progress_and_accuracy(&self, ui: &mut egui::Ui) {
+        let (progress, train_acc, test_acc) = {
+            let lock = self.state.lock().unwrap();
+            (lock.progress, lock.train_accuracy, lock.test_accuracy)
+        };
+
+        ui.add(egui::ProgressBar::new(progress / 100.0).show_percentage());
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            ui.label(format!("Training Accuracy: {:.2}%", train_acc));
+            ui.label(format!("Testing Accuracy: {:.2}%", test_acc));
+        });
+    }
+
+    fn ui_training_metrics(&self, ui: &mut egui::Ui) {
+        let (train_history, test_history) = {
+            let lock = self.state.lock().unwrap();
+            (
+                lock.train_accuracy_history.clone(),
+                lock.test_accuracy_history.clone(),
+            )
+        };
+
+        ui.collapsing("Training Metrics", |ui| {
+            egui_plot::Plot::new("Accuracy Plot")
+                .view_aspect(2.0)
+                .show(ui, |plot_ui| {
+                    let train_data: Vec<[f64; 2]> = train_history
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &acc)| [i as f64, acc as f64])
+                        .collect();
+
+                    let test_data: Vec<[f64; 2]> = test_history
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &acc)| [i as f64, acc as f64])
+                        .collect();
+
+                    plot_ui.line(
+                        egui_plot::Line::new(egui_plot::PlotPoints::from_iter(train_data))
+                            .name("Train Accuracy"),
+                    );
+                    plot_ui.line(
+                        egui_plot::Line::new(egui_plot::PlotPoints::from_iter(test_data))
+                            .name("Test Accuracy"),
+                    );
+                });
+        });
+    }
+
+    fn ui_prediction(&self, ui: &mut egui::Ui) {
+        ui.collapsing("Make a Prediction", |ui| {
+            let (network_exists, selected_index) = {
+                let lock = self.state.lock().unwrap();
+                (lock.network.is_some(), lock.selected_sample_index)
+            };
+
+            if network_exists {
+                let test_set = {
+                    let lock = self.state.lock().unwrap();
+                    lock.test_set.clone()
+                };
+                if !test_set.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label("Select Test Sample Index:");
+                        let mut lock = self.state.lock().unwrap();
+                        ui.add(egui::DragValue::new(&mut lock.selected_sample_index).range(0..=test_set.len()-1));
+                    });
+
+                    let new_selected_index = {
+                        let lock = self.state.lock().unwrap();
+                        lock.selected_sample_index
+                    };
+
+                    if new_selected_index < test_set.len() {
+                        let sample = &test_set[new_selected_index];
+                        let texture_id = {
+                            let mut lock = self.state.lock().unwrap();
+                            if let Some(texture) = lock.texture_cache.get(&new_selected_index) {
+                                texture.clone()
+                            } else {
+                                let image = convert_to_image(&sample.inputs);
+                                let texture = ui.ctx().load_texture(
+                                    format!("sample_image_{}", new_selected_index),
+                                    egui::ColorImage::from_rgb([28, 28], &image),
+                                    egui::TextureOptions::NEAREST,
+                                );
+
+                                lock.texture_cache.insert(new_selected_index, texture.clone());
+                                texture
+                            }
+                        };
+
+                        ui.image(&texture_id);
+
+                        if ui.button("Predict").clicked() {
+                            let predicted_label = {
+                                let lock = self.state.lock().unwrap();
+                                let network = lock.network.as_ref().unwrap();
+                                predict(network, sample)
+                            };
+
+                            let actual_label = sample
+                                .target
+                                .iter()
+                                .position(|&v| v == 1.0)
+                                .unwrap_or(0);
+
+                            {
+                                let mut lock = self.state.lock().unwrap();
+                                lock.prediction_result = Some((predicted_label, actual_label));
+                            }
+                        }
+
+                        let prediction = {
+                            let lock = self.state.lock().unwrap();
+                            lock.prediction_result
+                        };
+                        if let Some((prediction_result, actual)) = prediction {
+                            ui.label(format!("Prediction: {}", prediction_result));
+                            ui.label(format!("Actual Label: {}", actual));
+                        }
+                    } else {
+                        ui.label("Invalid sample index.");
+                    }
+                } else {
+                    ui.label("No test samples available.");
+                }
+            } else {
+                ui.label("Train the network first to make predictions.");
+            }
+        });
+    }
+
+    fn ui_logs(&self, ui: &mut egui::Ui) {
+        let mut lock = self.state.lock().unwrap();
+        ui.collapsing("Logs", |ui| {
+            ui.text_edit_multiline(&mut lock.status);
+        });
+    }
+
+    fn spawn_training_thread(&self, state_clone: Arc<Mutex<AppState>>) {
+        thread::spawn(move || {
+            let (config, train_set, test_set) = {
+                let lock = state_clone.lock().unwrap();
+                (
+                    lock.config.clone(),
+                    lock.train_set.clone(),
+                    lock.test_set.clone(),
+                )
+            };
+
+            let activations = config
+                .activations
+                .iter()
+                .map(|s| match s.as_str() {
+                    "sigmoid" => Activation::Sigmoid,
+                    "relu" => Activation::ReLU,
+                    "softmax" => Activation::Softmax,
+                    _ => Activation::Sigmoid,
+                })
+                .collect::<Vec<_>>();
+
+            let mut network = initialize_network(&config.layers, &activations);
+
+            for epoch in 0..config.epochs {
+                {
+                    let mut lock = state_clone.lock().unwrap();
+                    match lock.training_state {
+                        TrainingState::Paused => {
+                            lock.status = "Training paused.".to_string();
+                            lock.needs_repaint = true;
+                        }
+                        TrainingState::Idle => {
+                            lock.status = "Training halted.".to_string();
+                            lock.needs_repaint = true;
+                            return;
+                        }
+                        TrainingState::Complete => {
+                            lock.status = "Training completed.".to_string();
+                            lock.needs_repaint = true;
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                loop {
+                    {
+                        let mut lock = state_clone.lock().unwrap();
+                        match lock.training_state {
+                            TrainingState::Training => {
+                                lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
+                                break;
+                            }
+                            TrainingState::Complete => {
+                                lock.status = "Training completed.".to_string();
+                                lock.needs_repaint = true;
+                                return;
+                            }
+                            TrainingState::Idle => {
+                                lock.status = "Training halted.".to_string();
+                                lock.needs_repaint = true;
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+
+                train(&mut network, &train_set, 1, config.learning_rate);
+
+                {
+                    let mut lock = state_clone.lock().unwrap();
+                    lock.train_accuracy = evaluate(&mut network, &train_set);
+                    lock.test_accuracy = evaluate(&mut network, &test_set);
+                    lock.network = Some(network.clone());
+                    lock.needs_repaint = true;
+                }
+
+                {
+                    let mut lock = state_clone.lock().unwrap();
+                    lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
+                    lock.progress = ((epoch + 1) as f32 / config.epochs as f32) * 100.0;
+                }
+
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            {
+                let mut lock = state_clone.lock().unwrap();
+                lock.progress = 100.0;
+                lock.status = "Training complete".to_string();
+                lock.training_state = TrainingState::Complete;
+                lock.network = Some(network);
+                lock.needs_repaint = true;
+            }
+        });
+    }}
+
 impl eframe::App for GuiApp {
 
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-
-        // forgot to drop this lock. hours wasted: 8
-        let (training_state, needs_repaint, status) = {
-            let state_lock = self.state.lock().unwrap();
-            (state_lock.training_state, state_lock.needs_repaint, state_lock.status.clone())
+            let (training_state, needs_repaint, status) = {
+            let lock = self.state.lock().unwrap();
+            (
+                lock.training_state,
+                lock.needs_repaint,
+                lock.status.clone(),
+            )
         };
 
         if needs_repaint {
-            let mut state_lock =  self.state.lock().unwrap();
+            let mut lock = self.state.lock().unwrap();
             ctx.request_repaint();
-            state_lock.needs_repaint = false;
+            lock.needs_repaint = false;
         }
 
         if training_state == TrainingState::Training {
@@ -110,417 +507,30 @@ impl eframe::App for GuiApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Neural Network Trainer for MNIST");
+            ui.separator();
+
+            self.ui_configuration(ui);
 
             ui.separator();
 
-            ui.collapsing("Configuration", |ui| {
+            self.ui_training_controls(ui);
 
-                {
-                    let mut state_lock = self.state.lock().unwrap();
-                    ui.horizontal(|ui| {
-                        ui.label("Epochs:");
-                        ui.add(egui::DragValue::new(&mut state_lock.config.epochs).range(1..=1000));
-                    });
+            self.ui_status(ui, &status, training_state);
 
-                    ui.horizontal(|ui| {
-                        ui.label("Learning Rate:");
-                        ui.add(egui::DragValue::new(&mut state_lock.config.learning_rate).range(0.0001..=1.0));
-                    });
-
-                    let mut layers_input = state_lock
-                        .config
-                        .layers
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect::<Vec<String>>()
-                        .join(",");
-
-                    if ui
-                        .add(egui::TextEdit::singleline(&mut layers_input).hint_text("e.g., 784,256,128,64,10"))
-                        .changed()
-                    {
-                        state_lock.config.layers = layers_input
-                            .split(',')
-                            .map(|s| s.trim().parse().unwrap_or(0))
-                            .collect();
-                    }
-
-                    let mut activations_input = state_lock
-                        .config
-                        .activations
-                        .join(",");
-                    if ui
-                        .add(egui::TextEdit::singleline(&mut activations_input).hint_text("e.g., sigmoid,relu,relu"))
-                        .changed()
-                    {
-                        state_lock.config.activations = activations_input
-                            .split(',')
-                            .map(|s| s.trim().to_lowercase())
-                            .collect();
-                    }
-
-                    if state_lock.config.layers.len() < 2 {
-                        ui.colored_label(egui::Color32::RED, "Error: At least two layers required (input and output).");
-                    }
-                    if state_lock.config.activations.len() != state_lock.config.layers.len() - 1 {
-                        ui.colored_label(egui::Color32::RED, "Error: Number of activations must be one less than number of layers.");
-                    }
-                } // lock is dropped here
-            });
+            self.ui_progress_and_accuracy(ui);
 
             ui.separator();
 
-            ui.horizontal(|ui| {
-
-                let start_enabled = matches!(training_state, TrainingState::Idle | TrainingState::Complete);
-                
-
-                if ui.add_enabled(start_enabled, egui::Button::new("Start Training")).clicked() && start_enabled {  
-                    let state_clone = Arc::clone(&self.state);
-                    {
-                        let mut state_lock = state_clone.lock().unwrap();
-                        state_lock.training_state = TrainingState::Training;
-                        state_lock.status = "Training started".to_string();
-                        state_lock.train_accuracy_history.clear();
-                        state_lock.test_accuracy_history.clear();
-                    }
-
-                    thread::spawn(move || {
-
-                        let (config, train_set, test_set) = {
-                            let state_lock = state_clone.lock().unwrap();
-                            (
-                                state_lock.config.clone(),
-                                state_lock.train_set.clone(),
-                                state_lock.test_set.clone(),
-                            )
-                        };
-                        
-                        let activations = config
-                            .activations
-                            .iter()
-                            .map(|s| match s.as_str() {
-                                "sigmoid" => Activation::Sigmoid,
-                                "relu" => Activation::ReLU,
-                                "softmax" => Activation::Softmax,
-                                _ => Activation::Sigmoid, 
-                            })
-                            .collect::<Vec<_>>();
-
-                        let mut network = initialize_network(&config.layers, &activations);
-                        
-
-                        let mut is_resuming = false;
-                        for epoch in 0..config.epochs {
-                            
-                            {
-                                let mut state_lock = state_clone.lock().unwrap();
-                                match state_lock.training_state {
-                                    TrainingState::Paused => {
-                                        state_lock.status = "Training paused.".to_string();
-                                        state_lock.needs_repaint = true;
-                                    }
-                                    TrainingState::Idle => {
-                                        state_lock.status = "Training halted.".to_string();
-                                        state_lock.needs_repaint = true;
-                                        return;
-                                    }
-                                    TrainingState::Complete => {
-                                        state_lock.status = "Training completed.".to_string();
-                                        state_lock.needs_repaint = true;
-                                        return;
-                                    }
-                                    _ => {
-                                        // keep training, idiot
-                                    }
-                                }
-                            }
-
-                            // if it is paused, this thread will wait until 
-                            // the state changes
-
-                                    loop {
-                                        {
-                                            let mut state_lock = state_clone.lock().unwrap();
-                                            match state_lock.training_state {
-                                                TrainingState::Training => {
-                                                    state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
-                                                    
-                                                    break; // resumes
-                                                }
-                                                TrainingState::Complete => {
-                                                    state_lock.status = "Training completed.".to_string();
-                                                    state_lock.needs_repaint = true;
-                                                    return;
-                                                }
-                                                TrainingState::Idle => {
-                                                    state_lock.status = "Training halted.".to_string();
-                                                    state_lock.needs_repaint = true;
-                                                    return;
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                        thread::sleep(Duration::from_millis(100));
-                                    }
-
-                            train(&mut network, &train_set, 1, config.learning_rate);
-
-                            {
-                                let mut state_lock = state_clone.lock().unwrap();
-                                state_lock.train_accuracy = evaluate(&mut network, &train_set);
-                                state_lock.test_accuracy = evaluate(&mut network, &test_set);
-                                let train_acc = state_lock.train_accuracy;
-                                let test_acc = state_lock.test_accuracy;
-                                state_lock.train_accuracy_history.push(train_acc);
-                                state_lock.test_accuracy_history.push(test_acc);
-                                state_lock.network = Some(network.clone()); 
-                                state_lock.needs_repaint = true;
-                            }
-
-                            {
-                                let mut state_lock  = state_clone.lock().unwrap();
-                                state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
-                                state_lock.progress = ((epoch + 1) as f32 / config.epochs as f32) * 100.0;
-                            }
-
-
-                            thread::sleep(Duration::from_millis(10));
-                        }
-
-                        {
-                            let mut state_lock = state_clone.lock().unwrap();
-                            state_lock.progress = 100.0;
-                            state_lock.status = "Training complete".to_string();
-                            state_lock.training_state = TrainingState::Complete;
-                            state_lock.network = Some(network);
-                            state_lock.needs_repaint = true;
-                        }
-                    });
-                }
-
-                match training_state {
-                    TrainingState::Training => {
-                        if ui.button("Pause Training").clicked() {
-                            let mut state_lock = self.state.lock().unwrap();
-                            state_lock.training_state = TrainingState::Paused;
-                            state_lock.status = "Pausing training...".to_string();
-
-                        }
-
-                        if ui.button("Stop Training").clicked() {
-                            let mut state_lock = self.state.lock().unwrap();
-                            state_lock.training_state = TrainingState::Idle;
-                            state_lock.status = "Stopping training...".to_string();
-                        }
-                    }
-                    TrainingState::Paused => {
-                        if ui.button("Resume Training").clicked() {
-                            let mut state_lock = self.state.lock().unwrap();
-                            state_lock.training_state = TrainingState::Training;
-                            state_lock.status = "Resuming training...".to_string();
-                        }
-
-                        if ui.button("Stop Training").clicked() {
-                            let mut state_lock = self.state.lock().unwrap();
-                            state_lock.training_state = TrainingState::Idle;
-                            state_lock.status = "Stopping training...".to_string();
-                        }
-                    }
-                    _ => {
-                        ui.add_enabled(false, egui::Button::new("Pause Training"));
-                        ui.add_enabled(false, egui::Button::new("Stop Training"));
-                    }
-
-                    }
-
-
-               if ui.button("Save Model").clicked() {
-                    let mut state_lock = self.state.lock().unwrap();
-                    if let Some(ref network) = state_lock.network {
-                        let serialized = serde_json::to_string(network).unwrap();
-                        std::fs::write("trained_model.json", serialized).expect("Unable to save model");
-                        state_lock.status = "Model saved successfully.".to_string();
-                    } else {
-                        state_lock.status = "No trained network to save.".to_string();
-                    }
-                }
-
-                if ui.button("Load Model").clicked() {
-                    let mut state_lock = self.state.lock().unwrap();
-                    let data = std::fs::read_to_string("trained_model.json");
-                    match data {
-                        Ok(content) => {
-                            let network: Vec<crate::network::layer::Layer> = serde_json::from_str(&content).unwrap();
-                            state_lock.network = Some(network);
-                            state_lock.status = "Model loaded successfully.".to_string();
-                        }
-                        Err(_) => {
-                            state_lock.status = "Failed to load model.".to_string();
-                        }
-                    }
-                }
-            });
-
-            let status_color = match training_state {
-                TrainingState::Idle => egui::Color32::BLUE,
-                TrainingState::Training => egui::Color32::GOLD,
-                TrainingState::Paused => egui::Color32::ORANGE,
-                TrainingState::Complete => egui::Color32::GREEN,
-            };
-
-            ui.horizontal(|ui| {
-                ui.label("Status:");
-                ui.label(
-                    egui::RichText::new(&status)
-                    .color(status_color)
-                    .strong(),
-                );
-            });
-
-            let progress = {
-                let state_lock = self.state.lock().unwrap();
-                state_lock.progress
-            };
-
-            ui.add(egui::ProgressBar::new(progress / 100.0).show_percentage());
-
-            let (train_acc, test_acc) = {
-                let state_lock = self.state.lock().unwrap();
-                (state_lock.train_accuracy, state_lock.test_accuracy)
-            };
+            self.ui_training_metrics(ui);
 
             ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(format!("Training Accuracy: {:.2}%", train_acc));
-                ui.label(format!("Testing Accuracy: {:.2}%", test_acc));
-            });
 
-           ui.collapsing("Training Metrics", |ui| {
-                let (train_history, test_history) = {
-                    let state_lock = self.state.lock().unwrap();
-                    (state_lock.train_accuracy_history.clone(), state_lock.test_accuracy_history.clone())
-                };
+            self.ui_prediction(ui);
 
-                egui_plot::Plot::new("Accuracy Plot")
-                    .view_aspect(2.0)
-                    .show(ui, |plot_ui| {
-                        let train_data: Vec<[f64; 2]> = train_history
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &acc)| [i as f64, acc as f64])
-                            .collect();
-
-                        let test_data: Vec<[f64; 2]> = test_history
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &acc)| [i as f64, acc as f64])
-                            .collect();
-
-                        plot_ui.line(
-                            egui_plot::Line::new(egui_plot::PlotPoints::from_iter(train_data))
-                                .name("Train Accuracy"),
-                        );
-                        plot_ui.line(
-                            egui_plot::Line::new(egui_plot::PlotPoints::from_iter(test_data))
-                                .name("Test Accuracy"),
-                        );
-                    });
-            });
-            ui.separator();
-
-            
-            ui.collapsing("Make a Prediction", |ui| {
-                let (network_exists, _selected_index) = {
-                    let state_lock = self.state.lock().unwrap();
-                    (state_lock.network.is_some(), state_lock.selected_sample_index)
-                };
-
-                if network_exists {
-                    let test_set = {
-                        let state_lock = self.state.lock().unwrap();
-                        state_lock.test_set.clone()
-                    };
-                    if !test_set.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.label("Select Test Sample Index:");
-                            let mut state_lock = self.state.lock().unwrap();
-                            ui.add(egui::DragValue::new(&mut state_lock.selected_sample_index).range(0..=test_set.len()-1));
-                        });
-
-                        let new_selected_index = {
-                            let state_lock = self.state.lock().unwrap();
-                            state_lock.selected_sample_index
-                        };
-
-                        if new_selected_index < test_set.len() {
-                            let sample = &test_set[new_selected_index];
-
-                            let texture_id = {
-                                let mut state_lock = self.state.lock().unwrap();
-                                if let Some(texture) = state_lock.texture_cache.get(&new_selected_index) {
-                                    texture.clone()
-                                } else {
-                                    let image = convert_to_image(&sample.inputs);
-                                    let texture = ui.ctx().load_texture(
-                                        format!("sample_image_{}", new_selected_index),
-                                        egui::ColorImage::from_rgb([28, 28], &image),
-                                        egui::TextureOptions::NEAREST,
-                                    );
-
-                                    state_lock.texture_cache.insert(new_selected_index, texture.clone());
-                                    texture
-                                }
-                            };
-
-                            ui.image(&texture_id); 
-
-                            if ui.button("Predict").clicked() {
-
-                                let predicted_label = {
-                                    let state_lock = self.state.lock().unwrap();
-                                    let network = state_lock.network.as_ref().unwrap();
-                                    predict(network, sample)
-                                };
-
-                                let actual_label = sample
-                                    .target
-                                    .iter()
-                                    .position(|&v| v == 1.0)
-                                    .unwrap_or(0);
-
-                                {
-                                    let mut state_lock = self.state.lock().unwrap();
-                                    state_lock.prediction_result = Some((predicted_label, actual_label));
-                                }
-                            }
-
-                            let prediction = {
-                                let state_lock = self.state.lock().unwrap();
-                                state_lock.prediction_result
-                            };
-                            if let Some((prediction_result, actual)) = prediction {
-                                ui.label(format!("Prediction: {}", prediction_result));
-                                ui.label(format!("Actual Label: {}", actual));
-                            }
-                        } else {
-                            ui.label("Invalid sample index.");
-                        }
-                    } else {
-                        ui.label("No test samples available.");
-                    }
-                } else {
-                    ui.label("Train the network first to make predictions.");
-                }
-            });
-
-            ui.collapsing("Logs", |ui| {
-                let mut state_lock = self.state.lock().unwrap();
-                ui.text_edit_multiline(&mut state_lock.status);
-            });
+            self.ui_logs(ui);
         });
-
-    }}
+    }
+}
 
 fn predict(layers: &[Layer], sample: &Sample) -> usize {
     let mut layers = layers.to_vec(); 
