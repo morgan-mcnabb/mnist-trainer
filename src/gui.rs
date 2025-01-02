@@ -24,7 +24,6 @@ pub enum TrainingState {
 #[derive(Serialize, Deserialize)]
 pub struct AppState {
     pub config: Config,
-    pub training: bool,
     pub progress: f32,
     pub train_accuracy: f32,
     pub test_accuracy: f32,
@@ -53,7 +52,6 @@ impl Default for AppState {
 
         Self {
             config: Config::default(),
-            training: false,
             progress: 0.0,
             train_accuracy: 0.0,
             test_accuracy: 0.0,
@@ -173,7 +171,11 @@ impl eframe::App for GuiApp {
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.button("Start Training").clicked() && training_state == TrainingState::Idle {  
+
+                let start_enabled = matches!(training_state, TrainingState::Idle | TrainingState::Complete);
+                
+
+                if ui.add_enabled(start_enabled, egui::Button::new("Start Training")).clicked() && start_enabled {  
                     let state_clone = Arc::clone(&self.state);
                     {
                         let mut state_lock = state_clone.lock().unwrap();
@@ -206,7 +208,9 @@ impl eframe::App for GuiApp {
                             .collect::<Vec<_>>();
 
                         let mut network = initialize_network(&config.layers, &activations);
+                        
 
+                        let mut is_resuming = false;
                         for epoch in 0..config.epochs {
                             
                             {
@@ -234,36 +238,31 @@ impl eframe::App for GuiApp {
 
                             // if it is paused, this thread will wait until 
                             // the state changes
-                            loop {
-                                {
-                                    let mut state_lock = state_clone.lock().unwrap();
-                                    match state_lock.training_state {
-                                        TrainingState::Training => {
-                                            state_lock.status = format!("Resuming training... Epoch {}/{}", epoch + 1, config.epochs);
-                                            break; // this resumes training
+
+                                    loop {
+                                        {
+                                            let mut state_lock = state_clone.lock().unwrap();
+                                            match state_lock.training_state {
+                                                TrainingState::Training => {
+                                                    state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
+                                                    
+                                                    break; // resumes
+                                                }
+                                                TrainingState::Complete => {
+                                                    state_lock.status = "Training completed.".to_string();
+                                                    state_lock.needs_repaint = true;
+                                                    return;
+                                                }
+                                                TrainingState::Idle => {
+                                                    state_lock.status = "Training halted.".to_string();
+                                                    state_lock.needs_repaint = true;
+                                                    return;
+                                                }
+                                                _ => {}
+                                            }
                                         }
-                                        TrainingState::Complete => {
-                                            state_lock.status = "Training completed.".to_string();
-                                            state_lock.needs_repaint = true;
-                                            return;
-                                        }
-                                        TrainingState::Idle => {
-                                            state_lock.status = "Training halted.".to_string();
-                                            state_lock.needs_repaint = true;
-                                            return;
-                                        }
-                                        _ => {}
+                                        thread::sleep(Duration::from_millis(100));
                                     }
-                                }
-                                thread::sleep(Duration::from_millis(100));
-                            }
-
-
-                            {
-                                let mut state_lock  = state_clone.lock().unwrap();
-                                state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
-                                state_lock.progress = (epoch as f32 / config.epochs as f32) * 100.0;
-                            }
 
                             train(&mut network, &train_set, 1, config.learning_rate);
 
@@ -278,6 +277,13 @@ impl eframe::App for GuiApp {
                                 state_lock.network = Some(network.clone()); 
                                 state_lock.needs_repaint = true;
                             }
+
+                            {
+                                let mut state_lock  = state_clone.lock().unwrap();
+                                state_lock.status = format!("Training... Epoch {}/{}", epoch + 1, config.epochs);
+                                state_lock.progress = ((epoch + 1) as f32 / config.epochs as f32) * 100.0;
+                            }
+
 
                             thread::sleep(Duration::from_millis(10));
                         }
