@@ -4,7 +4,7 @@ use crate::data::loader::load_mnist;
 use crate::network::initialize_network;
 use crate::network::layer::Layer;
 use crate::network::activation::Activation;
-use crate::training::trainer::{train, forward_pass};
+use crate::training::trainer::{train, train_with_minibatch,forward_pass};
 use crate::data::dataset::Sample;
 use crate::metrics::accuracy::evaluate;
 use serde::{Deserialize, Serialize};
@@ -453,7 +453,8 @@ impl GuiApp {
                     thread::sleep(Duration::from_millis(100));
                 }
 
-                train(&mut network, &train_set, 1, config.learning_rate);
+                //train(&mut network, &train_set, 1, config.learning_rate);
+                train_with_minibatch(&mut network, &train_set, 1, config.learning_rate, config.batch_size,);
 
                 {
                     let mut lock = state_clone.lock().unwrap();

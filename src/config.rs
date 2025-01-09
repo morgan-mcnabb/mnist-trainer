@@ -6,6 +6,7 @@ pub struct Config {
     pub learning_rate: f32,
     pub layers: Vec<usize>,
     pub activations: Vec<String>,
+    pub batch_size: usize,
 }
 
 impl Default for Config {
@@ -15,6 +16,7 @@ impl Default for Config {
             learning_rate: 0.1,
             layers: vec![784, 128, 64, 10],
             activations: vec!["sigmoid".to_string(), "sigmoid".to_string(), "sigmoid".to_string()],
+            batch_size: 32,
         }
     }
 }
